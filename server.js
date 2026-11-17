@@ -2,11 +2,30 @@ const express = require("express");
 const path = require("path");
 const crypto = require("crypto");
 const rateLimit = require("express-rate-limit");
+const { Pool } = require("pg");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const COOKIE = "an_admin_session";
 const ADMIN_PAGE = path.join(__dirname, "private", "admin.html");
+
+// Railway injecte DATABASE_URL dans les variables du service applicatif.
+// Ne jamais placer cette URL dans le frontend.
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: false,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    })
+  : null;
+
+if (pool) {
+  pool.on("error", (error) => {
+    console.error("Erreur PostgreSQL inattendue:", error.message);
+  });
+}
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
@@ -90,14 +109,56 @@ app.post("/api/admin/logout", requireAdmin, (_req, res) => {
   });
   res.json({ ok: true });
 });
-app.get("/api/admin/:section", requireAdmin, (req, res) => {
+// Endpoint de vérification PostgreSQL. Il ne révèle aucune information de connexion.
+app.get("/api/health/database", async (_req, res) => {
+  if (!pool) {
+    return res.status(503).json({
+      connected: false,
+      error: "La variable DATABASE_URL n'est pas configurée."
+    });
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    return res.json({ connected: true, database: "PostgreSQL" });
+  } catch (error) {
+    console.error("Échec du test PostgreSQL:", error.message);
+    return res.status(503).json({
+      connected: false,
+      error: "Impossible de joindre la base PostgreSQL."
+    });
+  }
+});
+
+app.get("/api/admin/:section", requireAdmin, async (req, res) => {
   const allowed = ["overview", "orders", "products", "customers", "discounts"];
   if (!allowed.includes(req.params.section)) return res.sendStatus(404);
-  res.status(503).json({
-    ready: false,
-    section: req.params.section,
-    error: "La connexion à Supabase reste à configurer."
-  });
+
+  if (!pool) {
+    return res.status(503).json({
+      ready: false,
+      section: req.params.section,
+      error: "La variable DATABASE_URL n'est pas configurée."
+    });
+  }
+
+  try {
+    await pool.query("SELECT 1");
+    return res.status(501).json({
+      ready: false,
+      databaseConnected: true,
+      section: req.params.section,
+      error: "PostgreSQL est connecté. Les fonctions de données de cette section restent à développer."
+    });
+  } catch (error) {
+    console.error("Erreur PostgreSQL dans la section admin:", error.message);
+    return res.status(503).json({
+      ready: false,
+      databaseConnected: false,
+      section: req.params.section,
+      error: "La base PostgreSQL n'est pas accessible."
+    });
+  }
 });
 
 // The admin HTML is outside the public static directory and is served only to an authenticated admin.
@@ -109,6 +170,16 @@ app.get("/admin", (req, res) => {
 app.use("/private", (_req, res) => res.sendStatus(404));
 app.use(express.static(__dirname, { index: "index.html", dotfiles: "ignore" }));
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log("A&N Boutique server listening on port " + PORT);
 });
+
+async function shutdown() {
+  server.close(async () => {
+    if (pool) await pool.end();
+    process.exit(0);
+  });
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
