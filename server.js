@@ -157,6 +157,16 @@ function dbDown(res, error) {
   return res.status(503).json({ error: "La base de données n'est pas accessible." });
 }
 
+app.get("/api/products", async (_req, res) => {
+  if (!pool) return res.status(503).json({ error: "Base de données non configurée." });
+  try {
+    await ensureProducts();
+    const r = await pool.query("SELECT id, name, price, sale_price, category, stock, images FROM products WHERE active = TRUE ORDER BY id DESC");
+    res.set("Cache-Control", "no-store");
+    res.json({ products: r.rows });
+  } catch (e) { dbDown(res, e); }
+});
+
 app.get("/api/admin/products", requireAdmin, async (_req, res) => {
   if (!pool) return res.status(503).json({ error: "La variable DATABASE_URL n'est pas configurée." });
   try {

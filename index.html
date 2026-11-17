@@ -318,21 +318,30 @@
     {name:"Recharge portefeuille",date:"12 nov. 2026 · 09:15",category:"Wallet",amount:50,status:"Confirmé"},
     {name:"Achat USDT",date:"10 nov. 2026 · 14:08",category:"Exchange",amount:-25,status:"Confirmé"}
   ];
-  const products = [
-    {name:"T-shirt Essential",cat:"Homme",price:18,art:"ESSENTIAL"},
-    {name:"Chemise classique",cat:"Homme",price:32,art:"CLASSIC"},
-    {name:"Ensemble casual",cat:"Femme",price:42,art:"CASUAL"},
-    {name:"Sac élégant",cat:"Accessoires",price:29,art:"A&N"},
-    {name:"Veste moderne",cat:"Homme",price:55,art:"MODERN"},
-    {name:"Robe minimaliste",cat:"Femme",price:38,art:"STUDIO"}
-  ];
+  let products = [];
+  const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  async function loadProducts(){
+    try{
+      const r=await fetch("/api/products",{cache:"no-store"});
+      const d=await r.json();
+      if(!r.ok)throw new Error(d.error);
+      products=d.products.map(p=>({id:p.id,name:p.name,cat:p.category||"Autres",price:Number(p.sale_price!=null?p.sale_price:p.price),oldPrice:p.sale_price!=null?Number(p.price):null,stock:p.stock,img:p.images&&p.images[0]}));
+      const sel=document.getElementById("categoryFilter"),cur=sel.value;
+      const cats=[...new Set(products.map(p=>p.cat))].sort();
+      sel.innerHTML='<option value="all">Toutes catégories</option>'+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
+      sel.value=cats.includes(cur)?cur:"all";
+    }catch(e){products=[];}
+    renderProducts();
+  }
   let cart = JSON.parse(localStorage.getItem("an_cart") || "[]");
   const money = n => "$" + n.toFixed(2);
   function saveCart(){
     localStorage.setItem("an_cart",JSON.stringify(cart));
     document.getElementById("cartCount").textContent=String(cart.reduce((sum,item)=>sum+item.qty,0));
   }
-  function addToCart(name,price){
+  function addToCart(id){
+    const p=products.find(x=>x.id===id);if(!p)return;
+    const name=p.name,price=p.price;
     const existing=cart.find(item=>item.name===name);
     if(existing) existing.qty++;
     else cart.push({name,price,qty:1});
@@ -346,7 +355,7 @@
       document.getElementById("checkoutButton").disabled=true;
       return;
     }
-    container.innerHTML=cart.map((item,index)=>`<div class="cart-row"><div><strong>${item.name}</strong><small>${item.qty} × ${money(item.price)}</small></div><div><strong>${money(item.qty*item.price)}</strong> <button type="button" onclick="removeCartItem(${index})">Retirer</button></div></div>`).join("");
+    container.innerHTML=cart.map((item,index)=>`<div class="cart-row"><div><strong>${esc(item.name)}</strong><small>${item.qty} × ${money(item.price)}</small></div><div><strong>${money(item.qty*item.price)}</strong> <button type="button" onclick="removeCartItem(${index})">Retirer</button></div></div>`).join("");
     document.getElementById("cartTotal").textContent=money(cart.reduce((sum,item)=>sum+item.price*item.qty,0));
     document.getElementById("checkoutButton").disabled=false;
   }
@@ -380,8 +389,8 @@
     const q=(document.getElementById("productSearch").value||"").toLowerCase();
     const cat=document.getElementById("categoryFilter").value;
     const filtered=products.filter(p=>(p.name.toLowerCase().includes(q)||p.cat.toLowerCase().includes(q))&&(cat==="all"||p.cat===cat));
-    document.getElementById("productGrid").innerHTML=filtered.length?filtered.map((p,i)=>`
-      <article class="product"><div class="product-art">${p.art}</div><div class="product-body"><small>${p.cat.toUpperCase()}</small><h3>${p.name}</h3><div class="product-bottom"><span class="price">${money(p.price)}</span><button class="mini-btn" onclick="addToCart('${p.name.replace(/'/g,"\\'")}',${p.price})">Ajouter</button></div></div></article>`).join(""):'<div class="empty">Aucun article trouvé.</div>';
+    document.getElementById("productGrid").innerHTML=filtered.length?filtered.map(p=>`
+      <article class="product"><div class="product-art" style="overflow:hidden">${p.img?`<img src="${esc(p.img)}" alt="" style="width:100%;height:100%;object-fit:cover">`:esc(p.name.slice(0,10).toUpperCase())}</div><div class="product-body"><small>${esc(p.cat.toUpperCase())}</small><h3>${esc(p.name)}</h3><div class="product-bottom"><span class="price">${money(p.price)}${p.oldPrice!=null?` <s style="color:var(--muted);font-weight:500;font-size:11px">${money(p.oldPrice)}</s>`:""}</span>${p.stock>0?`<button class="mini-btn" onclick="addToCart(${p.id})">Ajouter</button>`:`<button class="mini-btn" disabled>Épuisé</button>`}</div></div></article>`).join(""):'<div class="empty">Aucun article trouvé.</div>';
   }
   function go(page){
     document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));
@@ -389,7 +398,7 @@
     document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("active",n.dataset.page===page));
     document.getElementById("sidebar").classList.remove("open");
     window.scrollTo({top:0,behavior:"smooth"});
-    if(page==="fashion")renderProducts();
+    if(page==="fashion")loadProducts();
   }
   document.querySelectorAll("[data-page]").forEach(el=>el.addEventListener("click",()=>go(el.dataset.page)));
   document.getElementById("menuToggle").addEventListener("click",()=>document.getElementById("sidebar").classList.toggle("open"));
@@ -460,7 +469,7 @@
     updateBalance();notify("Opération simulée. Aucun USDT réel transféré.");
   }
   document.getElementById("todayDate").textContent=new Intl.DateTimeFormat("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"}).format(new Date());
-  updateBalance();renderProducts();loadSavedForms();saveCart();renderCart();
+  updateBalance();loadProducts();loadSavedForms();saveCart();renderCart();
 </script>
 
 <script type="module">
