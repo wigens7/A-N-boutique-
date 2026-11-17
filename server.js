@@ -29,7 +29,12 @@ if (pool) {
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
-app.use(express.json({ limit: "20kb" }));
+const smallJson = express.json({ limit: "20kb" });
+const bigJson = express.json({ limit: "12mb" });
+app.use((req, res, next) => {
+  if (req.method === "POST" && req.path === "/api/admin/products") return bigJson(req, res, next);
+  return smallJson(req, res, next);
+});
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -128,6 +133,67 @@ app.get("/api/health/database", async (_req, res) => {
       error: "Impossible de joindre la base PostgreSQL."
     });
   }
+});
+
+let tableReady = null;
+function ensureProducts() {
+  if (!tableReady) {
+    tableReady = pool.query(`CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      price NUMERIC(12,2) NOT NULL,
+      sale_price NUMERIC(12,2),
+      category TEXT NOT NULL DEFAULT '',
+      stock INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      images JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`).catch((e) => { tableReady = null; throw e; });
+  }
+  return tableReady;
+}
+function dbDown(res, error) {
+  console.error("Erreur produits:", error.message);
+  return res.status(503).json({ error: "La base de données n'est pas accessible." });
+}
+
+app.get("/api/admin/products", requireAdmin, async (_req, res) => {
+  if (!pool) return res.status(503).json({ error: "La variable DATABASE_URL n'est pas configurée." });
+  try {
+    await ensureProducts();
+    const r = await pool.query("SELECT * FROM products ORDER BY id DESC");
+    res.json({ products: r.rows });
+  } catch (e) { dbDown(res, e); }
+});
+
+app.post("/api/admin/products", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: "La variable DATABASE_URL n'est pas configurée." });
+  const b = req.body || {};
+  const name = String(b.name || "").trim().slice(0, 200);
+  const price = Number(b.price);
+  const sale = b.sale_price === "" || b.sale_price == null ? null : Number(b.sale_price);
+  const stock = Number.isInteger(Number(b.stock)) ? Number(b.stock) : 0;
+  const images = Array.isArray(b.images) ? b.images.filter((x) => typeof x === "string" && x.startsWith("data:image/")).slice(0, 8) : [];
+  if (!name) return res.status(400).json({ error: "Le nom du produit est obligatoire." });
+  if (!Number.isFinite(price) || price < 0) return res.status(400).json({ error: "Prix invalide." });
+  if (sale !== null && (!Number.isFinite(sale) || sale < 0)) return res.status(400).json({ error: "Prix promotionnel invalide." });
+  try {
+    await ensureProducts();
+    const r = await pool.query(
+      "INSERT INTO products (name, price, sale_price, category, stock, images) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+      [name, price, sale, String(b.category || "").trim().slice(0, 100), stock, JSON.stringify(images)]
+    );
+    res.status(201).json({ ok: true, id: r.rows[0].id });
+  } catch (e) { dbDown(res, e); }
+});
+
+app.delete("/api/admin/products/:id", requireAdmin, async (req, res) => {
+  if (!pool) return res.status(503).json({ error: "La variable DATABASE_URL n'est pas configurée." });
+  try {
+    await ensureProducts();
+    await pool.query("DELETE FROM products WHERE id = $1", [parseInt(req.params.id, 10) || 0]);
+    res.json({ ok: true });
+  } catch (e) { dbDown(res, e); }
 });
 
 app.get("/api/admin/:section", requireAdmin, async (req, res) => {
