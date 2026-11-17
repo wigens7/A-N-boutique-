@@ -536,6 +536,18 @@
           authForm.reset();
         }
       } else {
+        // Admin credentials (Railway ADMIN_EMAIL / ADMIN_PASSWORD) are checked by the server first.
+        const adminRes = await fetch("/api/admin/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ email, password })
+        }).catch(() => null);
+        if (adminRes && adminRes.ok) {
+          const body = await adminRes.json();
+          window.location.href = body.redirect || "/admin";
+          return;
+        }
         const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         updateAuthUI(data.user);
